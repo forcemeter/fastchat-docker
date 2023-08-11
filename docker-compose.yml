@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+  # Worker 控制器，实现Worker 的分布式调度
+  fastchat-controller:
+    image: fastchat:latest
+    ports:
+      - "21001:21001"
+      - "7861:7861"
+    entrypoint: ["python3.9", "-m", "fastchat.serve.controller", "--host", "0.0.0.0", "--port", "21001"]
+    depends_on:
+      - fastchat-worker-qwen
+      - fastchat-worker-baichuan
+
+  # WebUI
+  fastchat-webui:
+    image: fastchat:latest
+    ports:
+      - "7860:7860"
+    depends_on:
+      fastchat-controller:
+        condition: service_started
+    entrypoint: ["python3.9", "-m", "fastchat.serve.gradio_web_server_multi", "--model-list-mode", "reload", "--controller-url", "http://fastchat-controller:21001", "--host", "0.0.0.0", "--port", "7860"]
+
+  # OpenAi 兼容接口
+  fastchat-api-server:
+    image: fastchat:latest
+    ports:
+      - "8000:8000"
+    depends_on:
+      - fastchat-controller
+    entrypoint: ["python3.9", "-m", "fastchat.serve.openai_api_server", "--controller-address", "http://fastchat-controller:21001", "--host", "0.0.0.0", "--port", "8000"]
+
+  #千问
+  fastchat-worker-qwen:
+    volumes:
+      - /files/huggingface:/files/huggingface
+    image: fastchat:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    entrypoint: ["python3.9", "-m", "fastchat.serve.model_worker", "--model-names=Qwen-7B-Chat", "--model-path=/files/huggingface/Qwen-7B-Chat", "--worker-address=http://fastchat-worker-qwen:21002", "--controller-address=http://fastchat-controller:21001", "--host=0.0.0.0", "--port=21002", "--device=cuda", "--gpus=0", "--num-gpus=1", "--max-gpu-memory=22GB"]
+
+  #百川
+  fastchat-worker-baichuan:
+    volumes:
+      - /files/huggingface:/files/huggingface
+    image: fastchat:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['2', '3']
+              capabilities: [gpu]
+    entrypoint: ["python3.9", "-m", "fastchat.serve.model_worker", "--model-names=Baichuan-13B-Chat", "--model-path=/files/huggingface/Baichuan-13B-Chat", "--worker-address=http://fastchat-worker-baichuan:21003", "--controller-address=http://fastchat-controller:21001", "--host=0.0.0.0", "--port=21003", "--device=cuda", "--num-gpus=2", "--max-gpu-memory=24GB"]
